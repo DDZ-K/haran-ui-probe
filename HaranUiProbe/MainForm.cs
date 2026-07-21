@@ -24,7 +24,7 @@ public sealed class MainForm : WinForms.Form
 
     public MainForm()
     {
-        Text = "HARAN UI 控件探测 v1.0";
+        Text = "HARAN UI 控件探测 v1.0.1";
         Width = 980;
         Height = 720;
         StartPosition = FormStartPosition.CenterScreen;
@@ -137,6 +137,8 @@ public sealed class MainForm : WinForms.Form
             using var automation = new UIA3Automation();
             var desktop = automation.GetDesktop();
             var windows = desktop.FindAllChildren(cf => cf.ByControlType(ControlType.Window));
+            var selfPid = Environment.ProcessId;
+            var selfTitleHint = "HARAN UI 控件探测";
 
             foreach (var w in windows)
             {
@@ -144,12 +146,23 @@ public sealed class MainForm : WinForms.Form
                 try { title = w.Name ?? ""; }
                 catch { continue; }
                 if (string.IsNullOrWhiteSpace(title)) continue;
+
+                // 排除本探针窗口（说明文字里也写了 Waiting for Input，会误报）
+                int wpid = -1;
+                try { wpid = w.Properties.ProcessId.ValueOrDefault; } catch { /* */ }
+                if (wpid == selfPid) continue;
+                if (title.IndexOf(selfTitleHint, StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                if (title.IndexOf("HaranUiProbe", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                if (title.IndexOf("haran-probe-", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                if (title.IndexOf("记事本", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                if (title.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)) continue;
+                if (title.IndexOf("Notepad", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+
                 if (!filters.Any(f => title.IndexOf(f, StringComparison.OrdinalIgnoreCase) >= 0))
                     continue;
 
                 windowCount++;
-                string pid = "?";
-                try { pid = w.Properties.ProcessId.ValueOrDefault.ToString(); } catch { /* ignore */ }
+                string pid = wpid > 0 ? wpid.ToString() : "?";
 
                 sb.AppendLine("--------------------------------------------------");
                 sb.AppendLine($"窗口: {title}");
@@ -166,16 +179,19 @@ public sealed class MainForm : WinForms.Form
 
             if (windowCount == 0)
             {
-                sb.AppendLine("未找到标题匹配的窗口。");
+                sb.AppendLine("未找到标题匹配的窗口（已排除本探针 / 记事本）。");
                 sb.AppendLine("请确认 HARAN 已打开；过滤器可改成更短关键字，例如只写 HARAN。");
                 sb.AppendLine();
-                sb.AppendLine("当前顶层窗口标题列表（前 40 个）：");
+                sb.AppendLine("当前顶层窗口标题列表（前 40 个，已跳过本进程）：");
                 var n = 0;
                 foreach (var w in windows)
                 {
                     string t;
                     try { t = w.Name ?? ""; } catch { continue; }
                     if (string.IsNullOrWhiteSpace(t)) continue;
+                    int wpid = -1;
+                    try { wpid = w.Properties.ProcessId.ValueOrDefault; } catch { /* */ }
+                    if (wpid == selfPid) continue;
                     sb.AppendLine($"  - {t}");
                     if (++n >= 40) break;
                 }
@@ -183,6 +199,7 @@ public sealed class MainForm : WinForms.Form
 
             sb.AppendLine();
             sb.AppendLine("==== 摘要 ====");
+            sb.AppendLine($"(已排除本探针 PID={selfPid} 与记事本，避免说明文字误报)");
             sb.AppendLine($"匹配窗口数: {windowCount}");
             sb.AppendLine($"遍历控件数: {elementCount}");
             sb.AppendLine($"含 Waiting for Input: {hitsWaiting.Count}");
@@ -192,15 +209,23 @@ public sealed class MainForm : WinForms.Form
 
             string verdict;
             if (hitsWaiting.Count > 0 && hitsNoData.Count == 0)
-                verdict = "【可读】检测到 Waiting for Input → 控件方案大概率可用";
+                verdict = "【可读】在目标窗检测到 Waiting for Input → 控件方案大概率可用";
             else if (hitsNoData.Count > 0 && hitsWaiting.Count == 0)
-                verdict = "【可读】检测到 no Repair Data（空闲）→ 控件方案大概率可用；请再在待判时扫一次";
+                verdict = "【可读】在目标窗检测到 no Repair Data（空闲）→ 控件方案大概率可用；请再在待判时扫一次";
             else if (hitsWaiting.Count > 0 && hitsNoData.Count > 0)
-                verdict = "【可读】两种状态文字都出现过 → 很好，可用文字做门闩";
+                verdict = "【可读】目标窗内两种状态文字都出现过 → 很好，可用文字做门闩";
             else if (windowCount > 0)
-                verdict = "【未读到目标字】找到 HARAN 窗但无 Waiting/no Repair Data → 可能自绘状态栏，需截图模板/OCR";
+                verdict = "【未读到目标字】找到 HARAN 窗但树内无 Waiting/no Repair Data → 状态栏可能自绘，需截图模板/OCR";
             else
                 verdict = "【未找到窗口】请打开 HARAN 或调整过滤器";
+
+            // 额外：把窗口标题里是否含这些字也单独标出（标题≠状态栏）
+            if (windowCount > 0 && hitsWaiting.Count == 0 && hitsNoData.Count == 0)
+            {
+                sb.AppendLine();
+                sb.AppendLine("提示：若底部肉眼能看见 State: Currently no Repair Data，");
+                sb.AppendLine("但本摘要为 0，说明该文字未暴露给 UI Automation（自绘/贴图状态栏）。");
+            }
 
             sb.AppendLine();
             sb.AppendLine(verdict);
