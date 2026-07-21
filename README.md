@@ -1,48 +1,46 @@
-# HARAN UI 控件探测（HaranUiProbe）
+# HARAN UI 探测 v2 · 状态栏截图
 
-小工具：用 **UI Automation (FlaUI UIA3)** 扫描 HARAN / Viscom「Semi-automatic Repair Station Display」窗口树，检查能否读到：
+Viscom/HARAN「Semi-automatic Repair Station Display」**就绪信号探针**。
 
-- `Waiting for Input`（待判定 / 可按键）
-- `Currently no Repair Data`（空闲）
+## 结论背景
 
-供评估「工位自动放行」是否可用**控件文字**做就绪门闩（相对截图 OCR 更稳）。
+- 供应商**无**官方就绪信号  
+- UIA 读不到 `Waiting for Input` / `Currently no Repair Data`（状态栏自绘）  
+- **v2 主方案**：截取窗口**底栏** → 与空闲/待判**模板**比对  
 
-## 运行（Win10 x64）
+## 使用步骤（产线电脑）
 
-1. 解压发布包  
-2. 先打开 HARAN 复判界面  
-3. 双击 `HaranUiProbe.exe`  
-4. 点 **扫描一次**（可选：自动轮询）  
-5. 看顶部摘要 + 下方日志  
-6. **保存结果到文件**，把 `probe-logs\*.txt` 发回分析  
+1. 解压，双击 `HaranUiProbe.exe`（HARAN 若管理员运行，本工具也管理员）  
+2. 打开 HARAN  
+3. **空闲**（底栏 `Currently no Repair Data`、全蓝）  
+   → 点 **截取底栏** → **保存为空闲模板**  
+4. **待判**（红框 + 底栏 `Waiting for Input`）  
+   → 点 **截取底栏** → **保存为待判模板**  
+5. 之后点 **立即匹配** 或勾选 **自动轮询**  
+6. 看顶部状态：  
+   - 绿色 **Waiting for Input（可判定）**  
+   - 蓝色 **no Repair Data（空闲）**  
+   - 橙色 **未知**（调阈值/底栏像素，或重录模板）  
 
-若 HARAN 以**管理员**运行，本工具也请**管理员**打开。
+模板目录：`exe 同级\templates\`  
+  - `status_idle.png`  
+  - `status_waiting.png`  
 
-## 结果怎么看
+## 参数
 
-| 摘要 | 含义 |
-|------|------|
-| 检测到 Waiting for Input | 控件方案大概率可用 |
-| 检测到 no Repair Data | 空闲态可读；请再在待判时扫一次 |
-| 找到窗但无目标字 | 状态栏可能自绘 → 需截图模板/OCR |
-| 未找到窗口 | 调整标题过滤或确认 HARAN 已开 |
+| 项 | 建议 |
+|----|------|
+| 底栏像素 | 36～48（把 State 那条蓝底栏包全） |
+| 阈值 | 0.85～0.92（误报多就升高） |
+| 轮询 | 400～800 ms |
 
-默认标题过滤：`HARAN;Repair Station;Semi-automatic`
-
-## 源码构建
+## 构建
 
 ```bat
 cd HaranUiProbe
 dotnet publish -c Release -r win-x64 --self-contained true ^
-  -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true ^
-  -o ..\publish
+  -p:PublishSingleFile=true -o ..\publish
 ```
-
-## 注意
-
-- 仅探测，不发送按键、不改产线逻辑  
-- 遍历深度/控件数有上限，避免卡死  
-- 与 NgStationTool 工位工具独立  
 
 ## 许可
 
