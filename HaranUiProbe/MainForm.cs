@@ -1,162 +1,40 @@
 using System.Text;
-using FlaUI.Core.AutomationElements;
-using FlaUI.Core.Definitions;
-using FlaUI.UIA3;
 using WinForms = System.Windows.Forms;
 
 namespace HaranUiProbe;
 
-/// <summary>
-/// v2：主推状态栏截图模板匹配；保留 UIA 扫描作对照。
-/// </summary>
 public sealed class MainForm : WinForms.Form
 {
-    private WinForms.TabControl _tabs = null!;
     private WinForms.TextBox _filter = null!;
-    private WinForms.NumericUpDown _barPx = null!;
-    private WinForms.NumericUpDown _minScore = null!;
-    private WinForms.NumericUpDown _pollMs = null!;
-    private WinForms.CheckBox _autoPoll = null!;
-    private WinForms.Label _result = null!;
-    private WinForms.Label _scores = null!;
-    private WinForms.PictureBox _preview = null!;
+    private WinForms.NumericUpDown _left = null!, _top = null!, _width = null!, _height = null!, _bottomOff = null!;
+    private WinForms.NumericUpDown _minScore = null!, _pollMs = null!;
+    private WinForms.CheckBox _fromBottom = null!, _autoPoll = null!;
+    private WinForms.Label _result = null!, _scores = null!, _tplCount = null!;
+    private WinForms.PictureBox _previewRoi = null!, _previewFull = null!;
     private WinForms.TextBox _log = null!;
     private WinForms.Timer _timer = null!;
-    private Bitmap? _lastBar;
-
-    // UIA tab
-    private WinForms.TextBox _uiaLog = null!;
-    private WinForms.CheckBox _onlyHit = null!;
+    private Bitmap? _lastRoi;
 
     public MainForm()
     {
-        Text = "HARAN UI 探测 v2.0 · 状态栏截图";
-        Width = 1000;
-        Height = 760;
+        Text = "HARAN UI 探测 v2.1 · 自定义区域 + 多模板";
+        Width = 1080;
+        Height = 820;
         StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Microsoft YaHei UI", 9f);
 
-        _tabs = new WinForms.TabControl { Dock = WinForms.DockStyle.Fill };
-        var tabBar = new WinForms.TabPage("状态栏截图（推荐）");
-        var tabUia = new WinForms.TabPage("UIA 控件扫描（对照）");
-        _tabs.TabPages.Add(tabBar);
-        _tabs.TabPages.Add(tabUia);
-        Controls.Add(_tabs);
-
-        BuildStatusTab(tabBar);
-        BuildUiaTab(tabUia);
-
-        _timer = new WinForms.Timer();
-        _timer.Tick += (_, _) => CaptureAndMatch(log: false);
-    }
-
-    private void BuildStatusTab(WinForms.TabPage tab)
-    {
-        var top = new WinForms.Panel { Dock = WinForms.DockStyle.Top, Height = 150, Padding = new Padding(8) };
-        var y = 6;
-        top.Controls.Add(new WinForms.Label
+        var root = new WinForms.TableLayoutPanel
         {
-            Left = 8, Top = y, Width = 960, Height = 36,
-            Text = "用法：1) 打开 HARAN  2) 空闲时点「保存为空闲模板」  3) 待判(Waiting)时点「保存为待判模板」  4) 点匹配/开轮询。\n" +
-                   "不读控件文字，只比底栏截图。阈值越高越严（默认 0.88）。"
-        });
-        y = 48;
-        top.Controls.Add(new WinForms.Label { Left = 8, Top = y + 3, Width = 70, Text = "标题过滤" });
-        _filter = new WinForms.TextBox
-        {
-            Left = 80, Top = y, Width = 260,
-            Text = "HARAN;Repair Station;Semi-automatic"
+            Dock = WinForms.DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 3
         };
-        top.Controls.Add(_filter);
+        root.RowStyles.Add(new WinForms.RowStyle(WinForms.SizeType.Absolute, 210));
+        root.RowStyles.Add(new WinForms.RowStyle(WinForms.SizeType.Absolute, 200));
+        root.RowStyles.Add(new WinForms.RowStyle(WinForms.SizeType.Percent, 100));
 
-        top.Controls.Add(new WinForms.Label { Left = 350, Top = y + 3, Width = 70, Text = "底栏像素" });
-        _barPx = new WinForms.NumericUpDown
-        {
-            Left = 425, Top = y, Width = 60,
-            Minimum = 20, Maximum = 120, Value = 40
-        };
-        top.Controls.Add(_barPx);
-
-        top.Controls.Add(new WinForms.Label { Left = 500, Top = y + 3, Width = 50, Text = "阈值" });
-        _minScore = new WinForms.NumericUpDown
-        {
-            Left = 550, Top = y, Width = 70,
-            DecimalPlaces = 2, Increment = 0.01M,
-            Minimum = 0.50M, Maximum = 0.99M, Value = 0.88M
-        };
-        top.Controls.Add(_minScore);
-
-        top.Controls.Add(new WinForms.Label { Left = 640, Top = y + 3, Width = 50, Text = "轮询ms" });
-        _pollMs = new WinForms.NumericUpDown
-        {
-            Left = 695, Top = y, Width = 70,
-            Minimum = 200, Maximum = 5000, Value = 500, Increment = 100
-        };
-        top.Controls.Add(_pollMs);
-
-        _autoPoll = new WinForms.CheckBox { Left = 780, Top = y + 2, Width = 100, Text = "自动轮询" };
-        _autoPoll.CheckedChanged += (_, _) =>
-        {
-            _timer.Interval = (int)_pollMs.Value;
-            _timer.Enabled = _autoPoll.Checked;
-            if (_autoPoll.Checked) CaptureAndMatch(log: true);
-        };
-        top.Controls.Add(_autoPoll);
-
-        y = 86;
-        var b1 = Btn(8, y, 100, "截取底栏");
-        b1.Click += (_, _) => CaptureAndMatch(log: true);
-        top.Controls.Add(b1);
-
-        var b2 = Btn(118, y, 130, "保存为空闲模板");
-        b2.Click += (_, _) => SaveTpl(idle: true);
-        top.Controls.Add(b2);
-
-        var b3 = Btn(258, y, 130, "保存为待判模板");
-        b3.Click += (_, _) => SaveTpl(idle: false);
-        top.Controls.Add(b3);
-
-        var b4 = Btn(398, y, 100, "立即匹配");
-        b4.Click += (_, _) => CaptureAndMatch(log: true);
-        top.Controls.Add(b4);
-
-        var b5 = Btn(508, y, 120, "打开模板目录");
-        b5.Click += (_, _) =>
-        {
-            System.Diagnostics.Process.Start("explorer.exe", StatusBarCapture.TemplateDir);
-        };
-        top.Controls.Add(b5);
-
-        var b6 = Btn(638, y, 100, "保存日志");
-        b6.Click += (_, _) => SaveLog(_log);
-        top.Controls.Add(b6);
-
-        y = 120;
-        _result = new WinForms.Label
-        {
-            Left = 8, Top = y, Width = 500, Height = 24,
-            Font = new Font("Microsoft YaHei UI", 11f, FontStyle.Bold),
-            Text = "状态：尚未截取"
-        };
-        top.Controls.Add(_result);
-        _scores = new WinForms.Label
-        {
-            Left = 520, Top = y + 2, Width = 440, Height = 22,
-            Text = "相似度：—"
-        };
-        top.Controls.Add(_scores);
-
-        var mid = new WinForms.Panel { Dock = WinForms.DockStyle.Top, Height = 90 };
-        mid.Controls.Add(new WinForms.Label { Left = 8, Top = 4, Width = 200, Text = "当前底栏预览：" });
-        _preview = new WinForms.PictureBox
-        {
-            Left = 8, Top = 24, Width = 960, Height = 56,
-            BorderStyle = WinForms.BorderStyle.FixedSingle,
-            SizeMode = WinForms.PictureBoxSizeMode.Zoom,
-            BackColor = Color.Black
-        };
-        mid.Controls.Add(_preview);
-
+        root.Controls.Add(BuildTop(), 0, 0);
+        root.Controls.Add(BuildPreview(), 0, 1);
         _log = new WinForms.TextBox
         {
             Dock = WinForms.DockStyle.Fill,
@@ -166,284 +44,328 @@ public sealed class MainForm : WinForms.Form
             ReadOnly = true,
             Font = new Font("Consolas", 9f)
         };
+        root.Controls.Add(_log, 0, 2);
+        Controls.Add(root);
 
-        tab.Controls.Add(_log);
-        tab.Controls.Add(mid);
-        tab.Controls.Add(top);
+        _timer = new WinForms.Timer();
+        _timer.Tick += (_, _) => CaptureMatch(log: false);
+        LoadRoiUi(StatusBarCapture.LoadRoi());
+        RefreshTplCount();
+        Append("待机底栏会切换：Currently no Repair Data / archiving Result File … → 空闲请存多张模板。");
+        Append("待判 Waiting for Input 也建议存 1～2 张。可用「框选区域」自定义搜索范围。");
     }
 
-    private void BuildUiaTab(WinForms.TabPage tab)
+    private WinForms.Control BuildTop()
     {
-        var top = new WinForms.Panel { Dock = WinForms.DockStyle.Top, Height = 70 };
-        _onlyHit = new WinForms.CheckBox
+        var p = new WinForms.Panel { Dock = WinForms.DockStyle.Fill, Padding = new Padding(8) };
+        int y = 4;
+        p.Controls.Add(new WinForms.Label
         {
-            Left = 12, Top = 12, Width = 220,
-            Text = "只显示关键字控件",
-            Checked = true
-        };
-        top.Controls.Add(_onlyHit);
-        var b = Btn(12, 38, 120, "UIA 扫描一次");
-        b.Click += (_, _) => RunUiaScan();
-        top.Controls.Add(b);
-        top.Controls.Add(new WinForms.Label
-        {
-            Left = 150, Top = 42, Width = 700,
-            Text = "对照用：此前已确认状态栏文字读不到属正常。"
+            Left = 8, Top = y, Width = 1040, Height = 34,
+            Text = "① 打开 HARAN  ② 框选/设置区域  ③ 空闲时「加入空闲模板」可多次  ④ 待判时「加入待判模板」  ⑤ 匹配/轮询\n" +
+                   "空闲会闪/切换状态文字时，每种外观各存一张（至少 2 张空闲模板）。"
         });
+        y = 42;
+        p.Controls.Add(L(8, y, 60, "过滤"));
+        _filter = new WinForms.TextBox { Left = 70, Top = y, Width = 240, Text = "HARAN;Repair Station;Semi-automatic" };
+        p.Controls.Add(_filter);
 
-        _uiaLog = new WinForms.TextBox
+        _fromBottom = new WinForms.CheckBox { Left = 330, Top = y + 2, Width = 140, Text = "相对底边定位", Checked = true };
+        _fromBottom.CheckedChanged += (_, _) => SyncRoiEnable();
+        p.Controls.Add(_fromBottom);
+
+        p.Controls.Add(L(480, y, 40, "底↑"));
+        _bottomOff = Num(520, y, 55, 0, 400, 0);
+        p.Controls.Add(_bottomOff);
+        p.Controls.Add(L(585, y, 25, "H"));
+        _height = Num(610, y, 55, 8, 800, 48);
+        p.Controls.Add(_height);
+        p.Controls.Add(L(675, y, 25, "L"));
+        _left = Num(700, y, 55, 0, 4000, 0);
+        p.Controls.Add(_left);
+        p.Controls.Add(L(765, y, 25, "T"));
+        _top = Num(790, y, 55, 0, 4000, 0);
+        p.Controls.Add(_top);
+        p.Controls.Add(L(855, y, 25, "W"));
+        _width = Num(880, y, 60, 0, 4000, 0); // 0 = 到右边
+        p.Controls.Add(_width);
+
+        y = 78;
+        p.Controls.Add(L(8, y, 40, "阈值"));
+        _minScore = new WinForms.NumericUpDown
         {
-            Dock = WinForms.DockStyle.Fill,
-            Multiline = true,
-            ScrollBars = WinForms.ScrollBars.Both,
-            WordWrap = false,
-            ReadOnly = true,
-            Font = new Font("Consolas", 9f)
+            Left = 50, Top = y, Width = 65, DecimalPlaces = 2, Increment = 0.01M,
+            Minimum = 0.50M, Maximum = 0.99M, Value = 0.86M
         };
-        tab.Controls.Add(_uiaLog);
-        tab.Controls.Add(top);
+        p.Controls.Add(_minScore);
+        p.Controls.Add(L(130, y, 50, "轮询ms"));
+        _pollMs = Num(185, y, 65, 200, 5000, 500);
+        p.Controls.Add(_pollMs);
+        _autoPoll = new WinForms.CheckBox { Left = 265, Top = y + 2, Width = 90, Text = "自动轮询" };
+        _autoPoll.CheckedChanged += (_, _) =>
+        {
+            _timer.Interval = (int)_pollMs.Value;
+            _timer.Enabled = _autoPoll.Checked;
+            if (_autoPoll.Checked) CaptureMatch(true);
+        };
+        p.Controls.Add(_autoPoll);
+
+        _tplCount = new WinForms.Label { Left = 370, Top = y + 4, Width = 280, Text = "模板: —" };
+        p.Controls.Add(_tplCount);
+
+        y = 112;
+        AddBtn(p, 8, y, 90, "截取区域", (_, _) => CaptureMatch(true));
+        AddBtn(p, 105, y, 100, "框选区域…", (_, _) => PickRegion());
+        AddBtn(p, 215, y, 120, "加入空闲模板", (_, _) => AddTpl(true));
+        AddBtn(p, 345, y, 120, "加入待判模板", (_, _) => AddTpl(false));
+        AddBtn(p, 475, y, 90, "立即匹配", (_, _) => CaptureMatch(true));
+        AddBtn(p, 575, y, 100, "打开模板夹", (_, _) =>
+            System.Diagnostics.Process.Start("explorer.exe", StatusBarCapture.TemplateRoot));
+        AddBtn(p, 685, y, 100, "清空空闲模板", (_, _) => { StatusBarCapture.ClearTemplates(true); RefreshTplCount(); Append("已清空空闲模板"); });
+        AddBtn(p, 795, y, 100, "清空待判模板", (_, _) => { StatusBarCapture.ClearTemplates(false); RefreshTplCount(); Append("已清空待判模板"); });
+        AddBtn(p, 905, y, 80, "保存ROI", (_, _) => { SaveRoiFromUi(); Append("ROI 已保存"); });
+
+        y = 150;
+        _result = new WinForms.Label
+        {
+            Left = 8, Top = y, Width = 520, Height = 28,
+            Font = new Font("Microsoft YaHei UI", 12f, FontStyle.Bold),
+            Text = "状态：尚未截取"
+        };
+        p.Controls.Add(_result);
+        _scores = new WinForms.Label { Left = 540, Top = y + 4, Width = 500, Height = 24, Text = "相似度：—" };
+        p.Controls.Add(_scores);
+
+        y = 182;
+        p.Controls.Add(new WinForms.Label
+        {
+            Left = 8, Top = y, Width = 1000, Height = 20,
+            ForeColor = Color.DimGray,
+            Text = "W=0 表示铺满到窗口右边。框选后会自动改为「非底边定位」并写入 L/T/W/H。"
+        });
+        SyncRoiEnable();
+        return p;
     }
 
-    private static WinForms.Button Btn(int x, int y, int w, string t) =>
-        new() { Left = x, Top = y, Width = w, Height = 28, Text = t };
+    private WinForms.Control BuildPreview()
+    {
+        var p = new WinForms.Panel { Dock = WinForms.DockStyle.Fill };
+        p.Controls.Add(new WinForms.Label { Left = 8, Top = 2, Width = 200, Text = "ROI 预览" });
+        p.Controls.Add(new WinForms.Label { Left = 420, Top = 2, Width = 300, Text = "全窗预览（红框=当前区域）" });
+        _previewRoi = new WinForms.PictureBox
+        {
+            Left = 8, Top = 22, Width = 400, Height = 160,
+            BorderStyle = WinForms.BorderStyle.FixedSingle,
+            SizeMode = WinForms.PictureBoxSizeMode.Zoom,
+            BackColor = Color.Black
+        };
+        _previewFull = new WinForms.PictureBox
+        {
+            Left = 420, Top = 22, Width = 620, Height = 160,
+            BorderStyle = WinForms.BorderStyle.FixedSingle,
+            SizeMode = WinForms.PictureBoxSizeMode.Zoom,
+            BackColor = Color.Black
+        };
+        p.Controls.Add(_previewRoi);
+        p.Controls.Add(_previewFull);
+        return p;
+    }
+
+    private void SyncRoiEnable()
+    {
+        _bottomOff.Enabled = _fromBottom.Checked;
+        _top.Enabled = !_fromBottom.Checked;
+    }
+
+    private StatusBarCapture.RoiConfig RoiFromUi() => new()
+    {
+        FromBottom = _fromBottom.Checked,
+        BottomOffset = (int)_bottomOff.Value,
+        Left = (int)_left.Value,
+        Top = (int)_top.Value,
+        Width = (int)_width.Value,
+        Height = (int)_height.Value
+    };
+
+    private void LoadRoiUi(StatusBarCapture.RoiConfig r)
+    {
+        _fromBottom.Checked = r.FromBottom;
+        _bottomOff.Value = Math.Clamp(r.BottomOffset, 0, 400);
+        _left.Value = Math.Clamp(r.Left, 0, 4000);
+        _top.Value = Math.Clamp(r.Top, 0, 4000);
+        _width.Value = Math.Clamp(r.Width, 0, 4000);
+        _height.Value = Math.Clamp(r.Height <= 0 ? 48 : r.Height, 8, 800);
+        SyncRoiEnable();
+    }
+
+    private void SaveRoiFromUi() => StatusBarCapture.SaveRoi(RoiFromUi());
 
     private string[] Filters()
     {
-        var f = (_filter.Text ?? "")
-            .Split(new[] { ';', ',', '，' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var f = (_filter.Text ?? "").Split(new[] { ';', ',', '，' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         return f.Length == 0 ? new[] { "HARAN" } : f;
     }
 
-    private void CaptureAndMatch(bool log)
+    private (IntPtr hwnd, string title, uint pid)? FindWin()
+    {
+        var wins = StatusBarCapture.FindWindows(Filters());
+        if (wins.Count == 0) return null;
+        var best = wins.OrderByDescending(w => w.Title.Length).First();
+        return (best.Hwnd, best.Title, best.Pid);
+    }
+
+    private void CaptureMatch(bool log)
     {
         try
         {
-            var wins = StatusBarCapture.FindWindows(Filters());
-            if (wins.Count == 0)
+            var win = FindWin();
+            if (win == null)
             {
-                _result.Text = "状态：未找到 HARAN 窗口";
-                _result.ForeColor = Color.DarkOrange;
-                if (log) AppendLog(_log, "未找到窗口，请检查 HARAN 是否打开、过滤关键字。");
+                SetResult("未找到 HARAN 窗口", Color.DarkOrange);
+                if (log) Append("未找到窗口");
                 return;
             }
 
-            // 优先标题最长的（通常主窗）
-            var best = wins.OrderByDescending(w => w.Title.Length).First();
-            using var bar = StatusBarCapture.CaptureBottomBar(best.Hwnd, barPixels: (int)_barPx.Value);
-            if (bar == null)
+            var roi = RoiFromUi();
+            var crop = StatusBarCapture.CaptureRoiWithOverlay(win.Value.hwnd, roi, out var fullMarked);
+            if (crop == null)
             {
-                _result.Text = "状态：截图失败";
-                _result.ForeColor = Color.Red;
-                if (log) AppendLog(_log, "截取底栏失败。");
+                SetResult("截图失败", Color.Red);
                 return;
             }
 
-            _lastBar?.Dispose();
-            _lastBar = new Bitmap(bar);
-            _preview.Image?.Dispose();
-            _preview.Image = new Bitmap(bar);
+            _lastRoi?.Dispose();
+            _lastRoi = new Bitmap(crop);
+            _previewRoi.Image?.Dispose();
+            _previewRoi.Image = new Bitmap(crop);
+            if (fullMarked != null)
+            {
+                _previewFull.Image?.Dispose();
+                _previewFull.Image = fullMarked;
+            }
+            crop.Dispose();
 
-            using var idle = StatusBarCapture.LoadTemplate(StatusBarCapture.IdleTemplatePath);
-            using var wait = StatusBarCapture.LoadTemplate(StatusBarCapture.WaitingTemplatePath);
             var min = (double)_minScore.Value;
-            var (kind, idleSc, waitSc) = StatusBarCapture.Match(bar, idle, wait, min);
-            _scores.Text = $"相似度：空闲={idleSc:F3}  待判={waitSc:F3}  阈值={min:F2}  |  窗={best.Title}";
+            var (kind, idleSc, waitSc, hit) = StatusBarCapture.MatchMulti(_lastRoi, min);
+            _scores.Text = $"空闲最佳={idleSc:F3}  待判最佳={waitSc:F3}  阈值={min:F2}  命中文件={hit ?? "-"}  |  {win.Value.title}";
 
             switch (kind)
             {
-                case StatusBarCapture.MatchKind.WaitingForInput:
-                    _result.Text = "状态：Waiting for Input（可判定）";
-                    _result.ForeColor = Color.DarkGreen;
+                case StatusBarCapture.MatchKind.Waiting:
+                    SetResult("状态：Waiting / 可判定", Color.DarkGreen);
                     break;
-                case StatusBarCapture.MatchKind.IdleNoRepairData:
-                    _result.Text = "状态：Currently no Repair Data（空闲）";
-                    _result.ForeColor = Color.SteelBlue;
+                case StatusBarCapture.MatchKind.Idle:
+                    SetResult("状态：空闲（含闪烁/归档等已录模板）", Color.SteelBlue);
                     break;
                 default:
-                    _result.Text = idle == null || wait == null
-                        ? "状态：未知（请先保存空闲+待判两套模板）"
-                        : "状态：未知（不像两套模板，可调阈值/底栏像素）";
-                    _result.ForeColor = Color.DarkOrange;
+                    SetResult(
+                        StatusBarCapture.CountTemplates(true) == 0 || StatusBarCapture.CountTemplates(false) == 0
+                            ? "状态：未知（请为空闲和待判各加入模板）"
+                            : "状态：未知（闪烁态请再「加入空闲模板」；或调区域/阈值）",
+                        Color.DarkOrange);
                     break;
             }
 
             if (log)
-            {
-                AppendLog(_log,
-                    $"[{DateTime.Now:HH:mm:ss}] PID={best.Pid} bar={bar.Width}x{bar.Height} " +
-                    $"idle={idleSc:F3} wait={waitSc:F3} => {kind}\r\n  {best.Title}");
-            }
+                Append($"[{DateTime.Now:HH:mm:ss}] {kind} idle={idleSc:F3} wait={waitSc:F3} hit={hit} roi=({roi.Left},{roi.Top},{roi.Width}x{roi.Height}) fromBottom={roi.FromBottom}");
         }
         catch (Exception ex)
         {
-            _result.Text = "状态：异常 " + ex.Message;
-            _result.ForeColor = Color.Red;
-            if (log) AppendLog(_log, "异常: " + ex);
+            SetResult("异常: " + ex.Message, Color.Red);
+            if (log) Append(ex.ToString());
         }
     }
 
-    private void SaveTpl(bool idle)
+    private void AddTpl(bool idle)
     {
         try
         {
-            if (_lastBar == null)
-                CaptureAndMatch(log: false);
-            if (_lastBar == null)
+            CaptureMatch(false);
+            if (_lastRoi == null)
             {
-                WinForms.MessageBox.Show(this, "请先成功截取底栏。", "提示");
+                WinForms.MessageBox.Show(this, "请先截取到有效区域。");
                 return;
             }
-
-            // 再截一次保证最新
-            CaptureAndMatch(log: false);
-            if (_lastBar == null) return;
-
-            var path = idle ? StatusBarCapture.IdleTemplatePath : StatusBarCapture.WaitingTemplatePath;
-            StatusBarCapture.SaveTemplate(_lastBar, path);
-            var name = idle ? "空闲 (no Repair Data)" : "待判 (Waiting for Input)";
-            AppendLog(_log, $"已保存{name}模板 → {path}");
-            WinForms.MessageBox.Show(this, $"已保存{name}模板：\n{path}", "OK");
-            CaptureAndMatch(log: true);
+            var path = StatusBarCapture.AddTemplate(_lastRoi, idle);
+            RefreshTplCount();
+            Append($"已加入{(idle ? "空闲" : "待判")}模板: {Path.GetFileName(path)}  （{(idle ? "空闲" : "待判")}共 {StatusBarCapture.CountTemplates(idle)} 张）");
+            SaveRoiFromUi();
+            CaptureMatch(true);
         }
         catch (Exception ex)
         {
-            WinForms.MessageBox.Show(this, ex.Message, "保存失败");
+            WinForms.MessageBox.Show(this, ex.Message);
         }
     }
 
-    private void RunUiaScan()
+    private void PickRegion()
     {
         try
         {
-            var filters = Filters();
-            var sb = new StringBuilder();
-            sb.AppendLine($"==== UIA {DateTime.Now:HH:mm:ss} ====");
-            var selfPid = Environment.ProcessId;
-            var hitsW = 0;
-            var hitsN = 0;
-            var winN = 0;
-            var elN = 0;
-
-            using var automation = new UIA3Automation();
-            var desktop = automation.GetDesktop();
-            var windows = desktop.FindAllChildren(cf => cf.ByControlType(ControlType.Window));
-            foreach (var w in windows)
+            var win = FindWin();
+            if (win == null)
             {
-                string title;
-                try { title = w.Name ?? ""; } catch { continue; }
-                int pid;
-                try { pid = w.Properties.ProcessId.ValueOrDefault; } catch { continue; }
-                if (pid == selfPid) continue;
-                if (string.IsNullOrWhiteSpace(title)) continue;
-                if (!filters.Any(f => title.IndexOf(f, StringComparison.OrdinalIgnoreCase) >= 0)) continue;
-                winN++;
-                sb.AppendLine($"窗口: {title} PID={pid}");
-                WalkUia(w, 0, 10, 3000, sb, _onlyHit.Checked, ref hitsW, ref hitsN, ref elN);
+                WinForms.MessageBox.Show(this, "未找到 HARAN 窗口");
+                return;
             }
-            sb.AppendLine($"摘要: 窗={winN} 控件={elN} Waiting命中={hitsW} NoData命中={hitsN}");
-            if (hitsW == 0 && hitsN == 0)
-                sb.AppendLine("（状态栏自绘时为 0 属正常，请用「状态栏截图」页）");
-            _uiaLog.Text = sb.ToString();
-        }
-        catch (Exception ex)
-        {
-            _uiaLog.Text = ex.ToString();
-        }
-    }
-
-    private static void WalkUia(
-        AutomationElement parent, int depth, int maxD, int maxE,
-        StringBuilder sb, bool onlyHit, ref int hitsW, ref int hitsN, ref int elN)
-    {
-        if (depth > maxD || elN >= maxE) return;
-        AutomationElement[] children;
-        try { children = depth == 0 ? new[] { parent } : parent.FindAllChildren(); }
-        catch { return; }
-        if (depth == 0)
-        {
-            // fall through to process parent then children
-        }
-        IEnumerable<AutomationElement> seq = depth == 0
-            ? new[] { parent }.Concat(SafeChildren(parent))
-            : children;
-
-        if (depth == 0)
-        {
-            foreach (var c in SafeChildren(parent))
-                WalkUiaNode(c, 1, maxD, maxE, sb, onlyHit, ref hitsW, ref hitsN, ref elN);
-            return;
-        }
-
-        foreach (var c in children)
-            WalkUiaNode(c, depth, maxD, maxE, sb, onlyHit, ref hitsW, ref hitsN, ref elN);
-    }
-
-    private static AutomationElement[] SafeChildren(AutomationElement p)
-    {
-        try { return p.FindAllChildren(); }
-        catch { return Array.Empty<AutomationElement>(); }
-    }
-
-    private static void WalkUiaNode(
-        AutomationElement el, int depth, int maxD, int maxE,
-        StringBuilder sb, bool onlyHit, ref int hitsW, ref int hitsN, ref int elN)
-    {
-        if (depth > maxD || elN >= maxE) return;
-        elN++;
-        string name = "", val = "";
-        try { name = el.Name ?? ""; } catch { /* */ }
-        try
-        {
-            if (el.Patterns.Value.IsSupported)
-                val = el.Patterns.Value.Pattern.Value ?? "";
-        }
-        catch { /* */ }
-        var blob = name + " " + val;
-        var w = blob.IndexOf("Waiting for Input", StringComparison.OrdinalIgnoreCase) >= 0;
-        var n = blob.IndexOf("no Repair Data", StringComparison.OrdinalIgnoreCase) >= 0;
-        if (w) hitsW++;
-        if (n) hitsN++;
-        if (!onlyHit || w || n || blob.IndexOf("State", StringComparison.OrdinalIgnoreCase) >= 0)
-        {
-            if (!string.IsNullOrWhiteSpace(name) || !string.IsNullOrWhiteSpace(val))
-                sb.AppendLine($"{new string(' ', depth * 2)}[{depth}] {name} | {val}");
-        }
-        foreach (var c in SafeChildren(el))
-            WalkUiaNode(c, depth + 1, maxD, maxE, sb, onlyHit, ref hitsW, ref hitsN, ref elN);
-    }
-
-    private static void AppendLog(WinForms.TextBox box, string line)
-    {
-        box.AppendText(line + "\r\n");
-    }
-
-    private void SaveLog(WinForms.TextBox box)
-    {
-        try
-        {
-            var dir = Path.Combine(AppContext.BaseDirectory, "probe-logs");
-            Directory.CreateDirectory(dir);
-            var path = Path.Combine(dir, $"haran-statusbar-{DateTime.Now:yyyyMMdd-HHmmss}.txt");
-            File.WriteAllText(path, box.Text ?? "", Encoding.UTF8);
-            // 也存最后一帧预览
-            if (_lastBar != null)
+            using var full = StatusBarCapture.CaptureFullWindow(win.Value.hwnd);
+            if (full == null)
             {
-                var img = Path.Combine(dir, $"haran-statusbar-{DateTime.Now:yyyyMMdd-HHmmss}.png");
-                _lastBar.Save(img);
+                WinForms.MessageBox.Show(this, "全窗截图失败");
+                return;
             }
-            WinForms.MessageBox.Show(this, "已保存:\n" + path, "OK");
+            using var dlg = new RegionPickerForm(full);
+            if (dlg.ShowDialog(this) != DialogResult.OK) return;
+            var r = dlg.SelectedRoi;
+            _fromBottom.Checked = false;
+            _left.Value = r.X;
+            _top.Value = r.Y;
+            _width.Value = r.Width;
+            _height.Value = r.Height;
+            SyncRoiEnable();
+            SaveRoiFromUi();
+            Append($"已框选 ROI: X={r.X} Y={r.Y} W={r.Width} H={r.Height}");
+            CaptureMatch(true);
         }
         catch (Exception ex)
         {
-            WinForms.MessageBox.Show(this, ex.Message, "失败");
+            WinForms.MessageBox.Show(this, ex.Message);
         }
+    }
+
+    private void SetResult(string t, Color c)
+    {
+        _result.Text = t;
+        _result.ForeColor = c;
+    }
+
+    private void RefreshTplCount()
+    {
+        _tplCount.Text = $"模板: 空闲 {StatusBarCapture.CountTemplates(true)} 张 · 待判 {StatusBarCapture.CountTemplates(false)} 张";
+    }
+
+    private void Append(string s) => _log.AppendText(s + "\r\n");
+
+    private static WinForms.Label L(int x, int y, int w, string t) =>
+        new() { Left = x, Top = y + 3, Width = w, Text = t };
+
+    private static WinForms.NumericUpDown Num(int x, int y, int w, int min, int max, int val) =>
+        new() { Left = x, Top = y, Width = w, Minimum = min, Maximum = max, Value = Math.Clamp(val, min, max) };
+
+    private static void AddBtn(WinForms.Control parent, int x, int y, int w, string t, EventHandler h)
+    {
+        var b = new WinForms.Button { Left = x, Top = y, Width = w, Height = 28, Text = t };
+        b.Click += h;
+        parent.Controls.Add(b);
     }
 
     protected override void OnFormClosed(WinForms.FormClosedEventArgs e)
     {
         _timer.Enabled = false;
-        _lastBar?.Dispose();
-        _preview.Image?.Dispose();
+        SaveRoiFromUi();
+        _lastRoi?.Dispose();
+        _previewRoi.Image?.Dispose();
+        _previewFull.Image?.Dispose();
         base.OnFormClosed(e);
     }
 }

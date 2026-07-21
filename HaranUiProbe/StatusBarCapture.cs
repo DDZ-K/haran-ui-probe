@@ -4,59 +4,88 @@ using System.Text;
 
 namespace HaranUiProbe;
 
-/// <summary>截取目标窗口底栏并与模板比对。</summary>
+/// <summary>窗口查找、区域截图、多模板匹配。</summary>
 public static class StatusBarCapture
 {
     public enum MatchKind
     {
         Unknown,
-        IdleNoRepairData,
-        WaitingForInput
+        Idle,
+        Waiting
+    }
+
+    public sealed class RoiConfig
+    {
+        /// <summary>相对窗口客户区：左边距</summary>
+        public int Left { get; set; }
+        /// <summary>相对窗口：上边距；若 FromBottom=true 则忽略，改用 BottomOffset</summary>
+        public int Top { get; set; }
+        public int Width { get; set; }
+        public int Height { get; set; } = 40;
+        /// <summary>true：从窗口底边向上 Height 像素，Top 无效；Left/Width 仍生效（Width=0 表示到右边缘）</summary>
+        public bool FromBottom { get; set; } = true;
+        public int BottomOffset { get; set; } // 距底边再上移多少
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    private struct RECT
-    {
-        public int Left, Top, Right, Bottom;
-    }
+    private struct RECT { public int Left, Top, Right, Bottom; }
 
-    private const int PW_RENDERFULLCONTENT = 0x00000002;
+    private const uint PW_RENDERFULLCONTENT = 0x00000002;
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count);
-
-    [DllImport("user32.dll")]
-    private static extern int GetWindowTextLength(IntPtr hWnd);
-
-    [DllImport("user32.dll")]
-    private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
-
-    [DllImport("user32.dll")]
-    private static extern bool IsWindowVisible(IntPtr hWnd);
-
-    [DllImport("user32.dll")]
-    private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
-
-    [DllImport("user32.dll")]
-    private static extern bool PrintWindow(IntPtr hwnd, IntPtr hdcBlt, uint nFlags);
-
-    [DllImport("user32.dll")]
-    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
-
+    [DllImport("user32.dll")] private static extern int GetWindowTextLength(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+    [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+    [DllImport("user32.dll")] private static extern bool PrintWindow(IntPtr hwnd, IntPtr hdcBlt, uint nFlags);
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
     private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
-    public static string TemplateDir
+    public static string TemplateRoot
     {
         get
         {
             var d = Path.Combine(AppContext.BaseDirectory, "templates");
-            Directory.CreateDirectory(d);
+            Directory.CreateDirectory(Path.Combine(d, "idle"));
+            Directory.CreateDirectory(Path.Combine(d, "waiting"));
             return d;
         }
     }
 
-    public static string IdleTemplatePath => Path.Combine(TemplateDir, "status_idle.png");
-    public static string WaitingTemplatePath => Path.Combine(TemplateDir, "status_waiting.png");
+    public static string IdleDir => Path.Combine(TemplateRoot, "idle");
+    public static string WaitingDir => Path.Combine(TemplateRoot, "waiting");
+    public static string RoiConfigPath => Path.Combine(TemplateRoot, "roi.txt");
+
+    public static void SaveRoi(RoiConfig r)
+    {
+        Directory.CreateDirectory(TemplateRoot);
+        File.WriteAllText(RoiConfigPath,
+            $"fromBottom={r.FromBottom}\nbottomOffset={r.BottomOffset}\nleft={r.Left}\ntop={r.Top}\nwidth={r.Width}\nheight={r.Height}\n");
+    }
+
+    public static RoiConfig LoadRoi()
+    {
+        var r = new RoiConfig();
+        if (!File.Exists(RoiConfigPath)) return r;
+        foreach (var line in File.ReadAllLines(RoiConfigPath))
+        {
+            var p = line.Split('=', 2);
+            if (p.Length != 2) continue;
+            var k = p[0].Trim().ToLowerInvariant();
+            var v = p[1].Trim();
+            switch (k)
+            {
+                case "frombottom": r.FromBottom = v is "1" or "true"; break;
+                case "bottomoffset": int.TryParse(v, out var bo); r.BottomOffset = bo; break;
+                case "left": int.TryParse(v, out var l); r.Left = l; break;
+                case "top": int.TryParse(v, out var t); r.Top = t; break;
+                case "width": int.TryParse(v, out var w); r.Width = w; break;
+                case "height": int.TryParse(v, out var h); r.Height = h; break;
+            }
+        }
+        return r;
+    }
 
     public static IReadOnlyList<(IntPtr Hwnd, string Title, uint Pid)> FindWindows(string[] titleFilters)
     {
@@ -73,51 +102,34 @@ public static class StatusBarCapture
             GetWindowText(h, sb, sb.Capacity);
             var title = sb.ToString();
             if (string.IsNullOrWhiteSpace(title)) return true;
-            if (title.IndexOf("HARAN UI 控件探测", StringComparison.OrdinalIgnoreCase) >= 0) return true;
-            if (title.IndexOf("记事本", StringComparison.OrdinalIgnoreCase) >= 0) return true;
-            if (title.IndexOf("Notepad", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (title.Contains("HARAN UI", StringComparison.OrdinalIgnoreCase)) return true;
+            if (title.Contains("记事本", StringComparison.OrdinalIgnoreCase)) return true;
+            if (title.Contains("Notepad", StringComparison.OrdinalIgnoreCase)) return true;
             if (titleFilters.Length == 0 ||
-                titleFilters.Any(f => title.IndexOf(f, StringComparison.OrdinalIgnoreCase) >= 0))
-            {
+                titleFilters.Any(f => title.Contains(f, StringComparison.OrdinalIgnoreCase)))
                 list.Add((h, title, pid));
-            }
             return true;
         }, IntPtr.Zero);
         return list;
     }
 
-    /// <summary>
-    /// 截取窗口底部条带。barRatio=底栏高度占窗口高度比例；也可 barPixels 固定像素。
-    /// </summary>
-    public static Bitmap? CaptureBottomBar(IntPtr hwnd, int barPixels = 36, double barRatio = 0)
+    public static Bitmap? CaptureFullWindow(IntPtr hwnd)
     {
         if (!GetWindowRect(hwnd, out var rc)) return null;
         var w = rc.Right - rc.Left;
         var h = rc.Bottom - rc.Top;
-        if (w < 50 || h < 50) return null;
-
-        var barH = barPixels;
-        if (barRatio > 0)
-            barH = Math.Max(20, (int)(h * barRatio));
-        barH = Math.Min(barH, h / 2);
-
-        using var full = new Bitmap(w, h, PixelFormat.Format24bppRgb);
+        if (w < 20 || h < 20) return null;
+        var full = new Bitmap(w, h, PixelFormat.Format24bppRgb);
         using (var g = Graphics.FromImage(full))
         {
             var hdc = g.GetHdc();
             try
             {
-                // 优先 PrintWindow（可抓部分被挡窗口）
                 if (!PrintWindow(hwnd, hdc, PW_RENDERFULLCONTENT))
                     PrintWindow(hwnd, hdc, 0);
             }
-            finally
-            {
-                g.ReleaseHdc(hdc);
-            }
+            finally { g.ReleaseHdc(hdc); }
         }
-
-        // 若 PrintWindow 全黑，回退 CopyFromScreen
         if (IsMostlyBlack(full))
         {
             using var g2 = Graphics.FromImage(full);
@@ -125,38 +137,83 @@ public static class StatusBarCapture
             {
                 g2.CopyFromScreen(rc.Left, rc.Top, 0, 0, new Size(w, h), CopyPixelOperation.SourceCopy);
             }
-            catch
-            {
-                return null;
-            }
+            catch { full.Dispose(); return null; }
         }
-
-        var rect = new Rectangle(0, h - barH, w, barH);
-        var bar = full.Clone(rect, PixelFormat.Format24bppRgb);
-        return bar;
+        return full;
     }
 
-    public static void SaveTemplate(Bitmap bar, string path)
+    public static Rectangle ResolveRoi(int winW, int winH, RoiConfig roi)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        bar.Save(path, ImageFormat.Png);
+        var height = Math.Clamp(roi.Height <= 0 ? 40 : roi.Height, 8, winH);
+        int left = Math.Max(0, roi.Left);
+        int width = roi.Width <= 0 ? (winW - left) : roi.Width;
+        width = Math.Clamp(width, 8, winW - left);
+        int top;
+        if (roi.FromBottom)
+        {
+            var bo = Math.Max(0, roi.BottomOffset);
+            top = winH - bo - height;
+        }
+        else
+        {
+            top = Math.Clamp(roi.Top, 0, winH - height);
+        }
+        top = Math.Clamp(top, 0, winH - height);
+        return new Rectangle(left, top, width, height);
     }
 
-    public static Bitmap? LoadTemplate(string path)
+    public static Bitmap? CaptureRoi(IntPtr hwnd, RoiConfig roi)
     {
-        if (!File.Exists(path)) return null;
-        // 打开副本，避免文件锁
-        using var fs = File.OpenRead(path);
-        using var tmp = new Bitmap(fs);
-        return new Bitmap(tmp);
+        using var full = CaptureFullWindow(hwnd);
+        if (full == null) return null;
+        var rect = ResolveRoi(full.Width, full.Height, roi);
+        if (rect.Width < 4 || rect.Height < 4) return null;
+        return full.Clone(rect, PixelFormat.Format24bppRgb);
     }
 
-    /// <summary>返回 0~1，1=完全相同。</summary>
+    public static Bitmap? CaptureRoiWithOverlay(IntPtr hwnd, RoiConfig roi, out Bitmap? fullCopy)
+    {
+        fullCopy = CaptureFullWindow(hwnd);
+        if (fullCopy == null) return null;
+        var rect = ResolveRoi(fullCopy.Width, fullCopy.Height, roi);
+        var crop = fullCopy.Clone(rect, PixelFormat.Format24bppRgb);
+        // 画红框到副本供预览
+        var marked = new Bitmap(fullCopy);
+        using (var g = Graphics.FromImage(marked))
+        using (var pen = new Pen(Color.Red, 3))
+            g.DrawRectangle(pen, rect);
+        fullCopy.Dispose();
+        fullCopy = marked;
+        return crop;
+    }
+
+    public static string AddTemplate(Bitmap img, bool idle)
+    {
+        var dir = idle ? IdleDir : WaitingDir;
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, $"{DateTime.Now:yyyyMMdd-HHmmss-fff}.png");
+        img.Save(path, ImageFormat.Png);
+        return path;
+    }
+
+    public static int CountTemplates(bool idle)
+    {
+        var dir = idle ? IdleDir : WaitingDir;
+        return Directory.Exists(dir) ? Directory.GetFiles(dir, "*.png").Length : 0;
+    }
+
+    public static void ClearTemplates(bool? idleOnly = null)
+    {
+        if (idleOnly != false)
+            foreach (var f in Directory.GetFiles(IdleDir, "*.png")) File.Delete(f);
+        if (idleOnly != true)
+            foreach (var f in Directory.GetFiles(WaitingDir, "*.png")) File.Delete(f);
+    }
+
     public static double Similarity(Bitmap a, Bitmap b)
     {
-        if (a == null || b == null) return 0;
-        using var aa = Resize(a, 320, 24);
-        using var bb = Resize(b, 320, 24);
+        using var aa = Resize(a, 320, 32);
+        using var bb = Resize(b, 320, 32);
         long sum = 0;
         long n = 0;
         for (var y = 0; y < aa.Height; y++)
@@ -164,31 +221,52 @@ public static class StatusBarCapture
         {
             var ca = aa.GetPixel(x, y);
             var cb = bb.GetPixel(x, y);
-            var ga = (ca.R + ca.G + ca.B) / 3;
-            var gb = (cb.R + cb.G + cb.B) / 3;
-            sum += Math.Abs(ga - gb);
+            sum += Math.Abs((ca.R + ca.G + ca.B) / 3 - (cb.R + cb.G + cb.B) / 3);
             n++;
         }
         if (n == 0) return 0;
-        var mad = sum / (double)n; // 0..255
-        return Math.Max(0, 1.0 - mad / 255.0);
+        return Math.Max(0, 1.0 - sum / (double)n / 255.0);
     }
 
-    public static (MatchKind kind, double idleScore, double waitScore) Match(
-        Bitmap current,
-        Bitmap? idleTpl,
-        Bitmap? waitTpl,
-        double minScore = 0.88)
+    public static (MatchKind kind, double bestIdle, double bestWait, string? hitFile) MatchMulti(
+        Bitmap current, double minScore)
     {
-        var idle = idleTpl == null ? 0 : Similarity(current, idleTpl);
-        var wait = waitTpl == null ? 0 : Similarity(current, waitTpl);
-        if (idle < minScore && wait < minScore)
-            return (MatchKind.Unknown, idle, wait);
-        if (wait >= idle && wait >= minScore)
-            return (MatchKind.WaitingForInput, idle, wait);
-        if (idle >= minScore)
-            return (MatchKind.IdleNoRepairData, idle, wait);
-        return (MatchKind.Unknown, idle, wait);
+        double bestIdle = 0, bestWait = 0;
+        string? hitIdle = null, hitWait = null;
+        foreach (var f in Directory.GetFiles(IdleDir, "*.png"))
+        {
+            try
+            {
+                using var t = LoadClone(f);
+                var s = Similarity(current, t);
+                if (s > bestIdle) { bestIdle = s; hitIdle = Path.GetFileName(f); }
+            }
+            catch { /* skip bad file */ }
+        }
+        foreach (var f in Directory.GetFiles(WaitingDir, "*.png"))
+        {
+            try
+            {
+                using var t = LoadClone(f);
+                var s = Similarity(current, t);
+                if (s > bestWait) { bestWait = s; hitWait = Path.GetFileName(f); }
+            }
+            catch { /* */ }
+        }
+
+        // 待判优先：同时超过阈值时取更高分，同分偏 waiting
+        if (bestWait >= minScore && bestWait >= bestIdle)
+            return (MatchKind.Waiting, bestIdle, bestWait, hitWait);
+        if (bestIdle >= minScore)
+            return (MatchKind.Idle, bestIdle, bestWait, hitIdle);
+        return (MatchKind.Unknown, bestIdle, bestWait, null);
+    }
+
+    private static Bitmap LoadClone(string path)
+    {
+        using var fs = File.OpenRead(path);
+        using var tmp = new Bitmap(fs);
+        return new Bitmap(tmp);
     }
 
     private static Bitmap Resize(Bitmap src, int w, int h)
