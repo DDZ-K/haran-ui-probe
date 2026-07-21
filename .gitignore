@@ -1,0 +1,7 @@
+**/bin/
+**/obj/
+publish/*.exe
+publish/*.pdb
+**/probe-logs/
+.vs/
+*.user
