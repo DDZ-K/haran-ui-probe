@@ -11,22 +11,22 @@ namespace HaranUiProbe;
 /// </summary>
 public sealed class MainForm : WinForms.Form
 {
-    private readonly WinForms.TabControl _tabs;
-    private readonly WinForms.TextBox _filter;
-    private readonly WinForms.NumericUpDown _barPx;
-    private readonly WinForms.NumericUpDown _minScore;
-    private readonly WinForms.NumericUpDown _pollMs;
-    private readonly WinForms.CheckBox _autoPoll;
-    private readonly WinForms.Label _result;
-    private readonly WinForms.Label _scores;
-    private readonly WinForms.PictureBox _preview;
-    private readonly WinForms.TextBox _log;
-    private readonly WinForms.Timer _timer;
+    private WinForms.TabControl _tabs = null!;
+    private WinForms.TextBox _filter = null!;
+    private WinForms.NumericUpDown _barPx = null!;
+    private WinForms.NumericUpDown _minScore = null!;
+    private WinForms.NumericUpDown _pollMs = null!;
+    private WinForms.CheckBox _autoPoll = null!;
+    private WinForms.Label _result = null!;
+    private WinForms.Label _scores = null!;
+    private WinForms.PictureBox _preview = null!;
+    private WinForms.TextBox _log = null!;
+    private WinForms.Timer _timer = null!;
     private Bitmap? _lastBar;
 
     // UIA tab
-    private readonly WinForms.TextBox _uiaLog;
-    private readonly WinForms.CheckBox _onlyHit;
+    private WinForms.TextBox _uiaLog = null!;
+    private WinForms.CheckBox _onlyHit = null!;
 
     public MainForm()
     {

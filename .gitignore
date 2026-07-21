@@ -1,7 +1,11 @@
 **/bin/
 **/obj/
-publish/*.exe
-publish/*.pdb
+publish/
+_release/
 **/probe-logs/
+**/templates/
 .vs/
 *.user
+*.exe
+*.pdb
+*.zip
